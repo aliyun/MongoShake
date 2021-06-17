@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 
-set -o errexit
+set -o errexit 
 
 # compile specified module
-modules=(collector)
-
-tags=""
+modules=(collector receiver)
 
 # older version Git don't support --short !
-#branch=`git symbolic-ref --short -q HEAD`
-branch=$(git symbolic-ref -q HEAD | awk -F'/' '{print $3;}')
-cid=$(git rev-parse HEAD)
+if [ -d ".git" ];then
+    #branch=`git symbolic-ref --short -q HEAD`
+    branch=$(git symbolic-ref -q HEAD | awk -F'/' '{print $3;}')
+    cid=$(git rev-parse HEAD)
+else
+    branch="unknown"
+    cid="0.0"
+fi
 branch=$branch","$cid
-
-output=./bin/
 
 # make sure we're in the directory where the script lives
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-rm -rf ${output}
+output="$SCRIPT_DIR/bin/"
 
-GOPATH=$(pwd)
-export GOPATH
+rm -rf "$output"
 
 #compile_line='-race'
 compile_line=''
@@ -45,34 +45,68 @@ goversion=$(go version | awk -F' ' '{print $3;}')
 info=$info","$goversion
 bigVersion=$(echo $goversion | awk -F'[o.]' '{print $2}')
 midVersion=$(echo $goversion | awk -F'[o.]' '{print $3}')
-if  [ $bigVersion -lt "1" -o $bigVersion -eq "1" -a $midVersion -lt "10" ]; then
-    echo "go version[$goversion] must >= 1.10"
+if  [ $bigVersion -lt "1" -o $bigVersion -eq "1" -a $midVersion -lt "9" ]; then
+    echo "go version[$goversion] must >= 1.9"
     exit 1
 fi
 
 t=$(date "+%Y-%m-%d_%H:%M:%S")
 info=$info","$t
 
-run_builder='go build -v'
+run_builder='go build'
 
-for i in "${modules[@]}" ; do
-	echo "Build ""$i"
-	if [ $DEBUG -eq 1 ]; then
-		$run_builder ${compile_line} -ldflags "-X $info" -gcflags='-N -l' -o "bin/$i" -tags "debug" "src/mongoshake//$i/main/$i.go"
-	else
-		$run_builder ${compile_line} -ldflags "-X $info" -o "bin/$i" "src/mongoshake//$i/main/$i.go"
-	fi
+goos=(linux darwin windows)
 
-	# execute and show compile messages
-	if [ -f ${output}/"$i" ];then
-		${output}/"$i"
-	fi
+if [ "$1" = linux ] ; then
+	goos=(linux)
+fi
+
+for g in "${goos[@]}"; do
+    export GOOS=$g
+    echo "try build goos=$g"
+    if [ $g != "windows" ]; then
+        build_info="$info -X mongoshake/common.SIGNALPROFILE=31 -X mongoshake/common.SIGNALSTACK=30"
+    else
+        build_info=$info
+    fi
+
+    for i in "${modules[@]}" ; do
+        echo "Build ""$i"
+        
+        # fetch all files in the main directory
+        cd "$SCRIPT_DIR"
+        cd "cmd/$i"
+
+        bin_name=$i.$g
+        if [ "$1" = linux ] ; then
+	        bin_name=$i
+        fi
+
+        # build
+        if [ $DEBUG -eq 1 ]; then
+            $run_builder ${compile_line} -ldflags "-X $build_info" -gcflags='-N -l' -o "$output/$bin_name" -tags "debug" .
+        else
+            $run_builder ${compile_line} -ldflags "-X $build_info" -o "$output/$bin_name" .
+        fi
+
+        # execute and show compile messages
+        if [ -f ${output}/"$i" ];then
+            ${output}/"$i"
+        fi
+    done
+    echo "build $g successfully!"
 done
 
+if [ "$1" = linux ] ; then
+	exit 0
+fi
+
+cd "$SCRIPT_DIR"
 # *.sh
-cp scripts/start.sh ${output}/
-cp scripts/stop.sh ${output}/
-cp scripts/mongoshake-stat ${output}/
+cp scripts/start.sh "$output"
+cp scripts/stop.sh "$output"
+cp scripts/mongoshake-stat "$output"
+cp scripts/comparison.py "$output"
 
 
 if [ "Linux" == "$(uname -s)" ];then
